@@ -1,0 +1,221 @@
+---
+title: "Milho e Clima"
+author: "Yan G. Nitschke "
+date: "Última atualização `r format(Sys.time(), '%b %d, %Y')`"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    latex_engine: xelatex
+fontsize: 12pt
+mainfont: Cambria
+geometry: left=3cm,right=2cm,top=3cm,bottom=2cm
+subtitle: "Uma Anlise a partir de métodos OLS, Tobit e Heckman"
+toc-title: Índice
+always_allow_html: true
+editor_options:
+  markdown:
+    wrap: 72
+header-includes:
+  - \usepackage{titling}
+ # - \pretitle{\begin{center} \includegraphics[width=1in,height=1in]{indice.png}\LARGE\\}
+ # - \posttitle{\end{center}}
+  - \usepackage{fontspec}
+  - \setmainfont{Cambria}
+  - \usepackage{ragged2e}
+  - \justifying
+---
+
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+install.packages("VGAM")
+library(tidyverse)
+library(stargazer)
+library(VGAM)
+library(AER)
+library(sampleSelection)
+library(margins)
+```
+
+# Introdução
+
+Nesta atividade, analisamos dados da produção de milho nos municípios brasileiros em 2023, avaliando os efeitos da temperatura média anual (`mean_temp`) e da precipitação acumulada (`sum_prec`) sobre o rendimento (`rendimento`) da produção de milho.
+
+Vamos considerar dois modelos:
+
+- **Modelo 1**: \( E(\text{rendimento}) = f(\text{mean\_temp}, \text{sum\_prec}) \)
+- **Modelo 2**: \( E(\ln(\text{rendimento})) = f(\text{mean\_temp}, \text{sum\_prec}) \)
+
+Além da comparação por Mínimos Quadrados Ordinários (MQO), será realizada análise com modelos mais apropriados para dados censurados (como o modelo Tobit), devido à presença de rendimentos iguais a zero.
+
+# Carregamento e visualização dos dados
+
+```{r}
+# Lendo os dados
+dados_milho <- read.csv("D:/OneDrive/Econometria 2/PraticasEconometriaII/Ativ 4/Dados_MilhoClima.csv")
+
+# Visualizando os primeiros dados
+head(dados_milho)
+
+# Estatísticas descritivas
+summary(dados_milho)
+```
+## Resumo dos Dados
+
+O conjunto de dados `dados_milho` possui 5.433 observações e 6 variáveis: `cod_munic` (código do município), `area` (área plantada em hectares), `quantidade` (produção total em toneladas), `mean_temp` (temperatura média anual em graus Celsius), `sum_prec` (precipitação acumulada no ano em milímetros) e `rendimento` (rendimento em toneladas por hectare, calculado como quantidade dividida pela área).
+
+A variável `rendimento` apresenta valores igual a zero em alguns municípios, o que indica ausência de produção apesar da área plantada, e também possui valores ausentes (NA). Situação semelhante ocorre com as variáveis `quantidade` e `area`, que apresentam respectivamente 29 e 12 valores faltantes. Esses aspectos demandarão atenção na etapa de modelagem, principalmente no uso de modelos apropriados para dados censurados ou com viés de seleção.
+
+Em termos descritivos, o rendimento médio dos municípios é de aproximadamente 3,59 toneladas por hectare, com valores variando de 0 até 14,2. A temperatura média nos municípios varia de aproximadamente 14,5°C a 30,5°C, com uma média de 23,6°C. A precipitação anual apresenta ampla variação, de cerca de 26 mm até mais de 3.100 mm, com média de 1.294 mm.
+
+A presença de zeros e NAs em `rendimento` sugere um possível caso de censura à esquerda, tornando necessária a aplicação de modelos como o Tobit para garantir estimativas consistentes. A análise a seguir irá explorar os modelos propostos e compará-los com abordagens que consideram essas limitações.
+# Tratamento e Preparação dos Dados
+
+```{r}
+# Lendo os dados
+dados_milho <- read.csv("D:/OneDrive/Econometria 2/PraticasEconometriaII/Ativ 4/Dados_MilhoClima.csv")
+
+# Verificando valores ausentes
+colSums(is.na(dados_milho))
+
+# Removendo observações com NA em variáveis essenciais
+dados_milho <- dados_milho %>%
+  filter(!is.na(area), !is.na(quantidade), !is.na(mean_temp), !is.na(sum_prec))
+
+# Mantendo observações com rendimento igual a zero (para análise de censura)
+# Criando variável binária: produziu ou não (para Heckman)
+dados_milho <- dados_milho %>%
+  mutate(produtor = ifelse(rendimento > 0, 1, 0),
+         log_rendimento = ifelse(rendimento > 0, log(rendimento), NA))
+
+num_obs <- nrow(dados_milho)
+num_zeros <- sum(dados_milho$rendimento == 0, na.rm = TRUE)
+num_naozeros <-  num_obs - num_zeros
+percent_zeros <- num_zeros/ num_obs
+percent_naozeros <- 1 - percent_zeros
+cat("Número de observações com rendimento = 0 :"
+    ,num_zeros ,"(",percent_zeros*100,"%)")
+cat("Número de observações com rendimento != 0:"
+    ,num_naozeros ,"(",percent_naozeros*100,"%)")
+# Visualização geral da base após limpeza
+stargazer(dados_milho, type = "text", align = TRUE)
+```
+
+---
+
+# Estimação dos Modelos
+
+## Modelo MQO para `rendimento`
+```{r}
+modelo_mqo <- lm(rendimento ~ mean_temp + sum_prec, data = dados_milho)
+stargazer(modelo_mqo, title = "Modelo MQO para Rendimento (nível)",
+          type = "text", align = TRUE)
+```
+O modelo de Mínimos Quadrados Ordinários (MQO) aplicado ao rendimento médio de 
+milho nos municípios brasileiros em 2023 revela uma relação estatisticamente significativa entre as variáveis climáticas e 
+a produtividade agrícola. A temperatura média anual (mean_temp) apresentou coeficiente negativo de -0,457 (p < 0,01), 
+indicando que, mantida constante a precipitação, um aumento de 1°C na temperatura média está associado, em média, a uma redução de 
+0,457 toneladas por hectare no rendimento do milho. Por outro lado, a variável sum_prec (precipitação anual acumulada) 
+teve efeito positivo e significativo, com coeficiente de 0,001 (p < 0,01), sugerindo que um aumento de 1 mm de chuva ao 
+longo do ano está associado, em média, a um acréscimo de 0,001 tonelada por hectare. O modelo apresenta um R² ajustado 
+de 0,325, o que indica que cerca, segundo o modelo, de 32,5% da variação no rendimento é explicada pelas variáveis climáticas incluídas. Esses 
+resultados confirmam a relevância das condições climáticas sobre a produtividade agrícola, especialmente os efeitos adversos
+do aumento da temperatura, e reforçam a necessidade de considerar tais fatores na formulação de políticas agrícolas.
+
+
+
+
+## Modelo MQO para `log(rendimento)` (apenas produtores)
+```{r}
+modelo_mqo_log <- lm(log_rendimento ~ mean_temp + sum_prec,
+                     data = dados_milho %>% filter(produtor == 1))
+stargazer(modelo_mqo_log, title = "Modelo MQO para log(Rendimento)", 
+          type = "text", align = TRUE)
+```
+No modelo MQO aplicado à variável dependente transformada em logaritmo (log_rendimento), os resultados indicam 
+efeitos estatisticamente significativos das variáveis climáticas sobre a produtividade do milho entre os municípios 
+produtores. O coeficiente da temperatura média anual (mean_temp) foi de -0,152 (p < 0,01), sugerindo que um aumento 
+de 1°C na temperatura média está associado a uma redução aproximada de 15,2% no rendimento, dado que a transformação 
+logarítmica permite interpretação em termos percentuais. A precipitação total anual (sum_prec) mantém um efeito positivo 
+e significativo, com coeficiente de 0,001 (p < 0,01), o que indica que cada milímetro adicional de chuva está associado 
+a um aumento de cerca de 0,1% no rendimento médio por hectare. O modelo apresenta um R² ajustado de 0,344, levemente superior 
+ao modelo em nível, sugerindo melhor capacidade explicativa das variáveis independentes quando o rendimento é modelado em termos 
+relativos. Essa especificação logarítmica reduz a influência de observações extremas e reforça a robustez dos efeitos climáticos 
+sobre a produtividade agrícola, especialmente quanto à sensibilidade negativa à elevação de temperatura.
+
+
+
+## Modelo Tobit para `rendimento` censurado à esquerda
+```{r}
+# Estimando modelo Tobit
+
+dados_tobit <- dados_milho %>%
+  filter(!is.na(rendimento), !is.na(mean_temp), !is.na(sum_prec))
+
+modelo_tobit <- tobit(rendimento ~ mean_temp + sum_prec,
+                      left = 0, right = Inf,
+                      data = dados_tobit)
+
+stargazer(modelo_tobit,type = "text", align = TRUE)
+```
+
+O modelo Tobit foi utilizado para lidar com a presença de municípios com rendimento igual a zero, algo comum em dados agrícolas. Os resultados mostram que a temperatura média tem um efeito negativo e significativo sobre o rendimento: um aumento de 1°C está associado a uma redução média de 0,47 toneladas por hectare. Já a precipitação tem efeito positivo, também significativo, embora com menor intensidade (coeficiente de 0,001). O modelo foi estimado com 5.404 observações e apresentou um teste de Wald altamente significativo, indicando que as variáveis explicativas são relevantes no modelo.
+
+A escolha do modelo Tobit é apropriada porque ele considera que os valores de rendimento igual a zero não são apenas “ausências” de produção, mas sim casos censurados — ou seja, sabemos que o rendimento não foi maior que zero, mas não sabemos qual seria o valor se houvesse produção. O modelo MQO ignora isso e pode gerar estimativas distorcidas. O Tobit corrige esse problema ao tratar os zeros de forma adequada, oferecendo estimativas mais confiáveis.
+## Modelo Heckman (Heckit) para correção de viés de seleção
+```{r}
+# Etapa 1: modelo de seleção (se o município produziu ou não milho)
+# Etapa 2: log(rendimento), apenas onde houve produção
+
+modelo_heckit <- heckit(selection = produtor ~ mean_temp + sum_prec,
+                        outcome   = log_rendimento ~ mean_temp + sum_prec,
+                        data = dados_milho)
+stargazer(modelo_heckit,type = "text", align = T)
+```
+O modelo de Heckman foi usado para corrigir o viés de seleção que pode ocorrer quando analisamos o rendimento apenas nos municípios que produziram milho. A ideia é que os municípios que produziram podem ser diferentes dos que não produziram, e isso pode afetar os resultados. No modelo, o efeito da temperatura foi de −0,029 e o da precipitação foi de 0,001, mas nenhum dos dois foi estatisticamente significativo na segunda etapa.
+Apesar disso, os parâmetros da correção do modelo — como o rho = −2,117 e a razão de Mills = −7,537 — indicam que há viés de seleção. Isso mostra que é importante considerar que os dados de rendimento não estão disponíveis para todos os municípios, apenas para os que produziram. O modelo de Heckman tenta corrigir esse problema, separando a decisão de produzir da análise do rendimento. Mesmo que os coeficientes não tenham sido significativos, a aplicação do modelo ajuda a melhorar a análise e evitar interpretações incorretas.
+---
+
+# Comparação das Estimações
+
+```{r}
+stargazer(modelo_mqo, modelo_mqo_log,
+          title = "Comparação entre MQO (nível e log)", type = "text", align = TRUE)
+
+# Comparação com modelo Heckit
+stargazer(modelo_mqo_log, modelo_heckit,
+          title = "Modelo log(Rendimento) com e sem correção por seleção (Heckman)",
+          type = "text", align = TRUE)
+```
+A análise comparativa entre os modelos estimados por Mínimos Quadrados Ordinários (MQO), Tobit e 
+Heckman destaca diferenças importantes na interpretação e robustez das estimativas. O modelo MQO 
+em nível estimou um efeito negativo da temperatura média de −0,457 (p < 0,01) e um efeito positivo 
+da precipitação de 0,001 (p < 0,01) sobre o rendimento médio de milho (toneladas/hectare), com um 
+R² ajustado de 0,325. O modelo em log (Modelo 2) mostrou resultados similares: o coeficiente da temperatura 
+caiu para −0,152 (p < 0,01), indicando que um aumento de 1°C está associado a uma redução de aproximadamente 
+15,2% no rendimento, enquanto o da precipitação manteve-se em 0,001 (p < 0,01), com R² ajustado de 0,344.
+
+O modelo Tobit, mais apropriado para lidar com os rendimentos igual a zero, apresentou coeficientes levemente 
+mais intensos: −0,470 para a temperatura média (p < 0,01) e 0,001 para a precipitação (p < 0,01). O modelo 
+apresentou um alto valor do teste de Wald (2.385,313, p < 0,01), reforçando a significância conjunta das variáveis.
+
+Por fim, o modelo Heckman, que tenta corrigir o viés de seleção ao considerar a decisão de produzir ou não, estimou um 
+efeito da temperatura de −0,029 (não significativo) e da precipitação de 0,001 (não significativo) sobre o log do rendimento. 
+A razão de Mills inversa foi estimada em −7,537, e o parâmetro de correlação dos erros (rho) foi −2,117, sugerindo a presença 
+de viés de seleção, ainda que a instabilidade dos coeficientes indique possível problema de identificação do modelo.
+
+Em resumo, os modelos MQO oferecem resultados consistentes e interpretáveis, mas são limitados diante da censura e seleção 
+amostral presentes nos dados. O modelo Tobit se destaca como a melhor alternativa em termos de robustez e aderência à 
+estrutura da variável dependente, enquanto o Heckman destaca a importância de considerar o processo de seleção, ainda que seus resultados requeiram cautela na interpretação.
+
+
+
+# Considerações Finais
+
+Este exercício demonstrou a aplicação de diferentes métodos de regressão considerando as particularidades dos dados — como a presença de zeros e ausência de produção em parte dos municípios. O modelo Tobit mostrou-se adequado para tratar a censura à esquerda, enquanto o modelo de seleção (Heckit) permite considerar o viés resultante da seleção dos municípios produtores.
+
+A continuidade da análise poderá envolver testes de robustez, avaliação dos resíduos e inclusão de possíveis variáveis instrumentais, caso se suspeite de endogeneidade nas variáveis climáticas.
